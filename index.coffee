@@ -308,7 +308,7 @@ class RedisSMQ extends EventEmitter
 		#
 		# {id, message, rc, fr}
 
-		script_popMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], "-inf", KEYS[2], "LIMIT", "0", "1")
+		script_popMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
 			if #msg == 0 then
 				return {}
 			end
@@ -344,7 +344,7 @@ class RedisSMQ extends EventEmitter
 		#
 		# {id, message, rc, fr}
 
-		script_receiveMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], "-inf", KEYS[2], "LIMIT", "0", "1")
+		script_receiveMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
 			if #msg == 0 then
 				return {}
 			end
