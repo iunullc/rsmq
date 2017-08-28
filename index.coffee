@@ -512,8 +512,10 @@ class RedisSMQ extends EventEmitter
 
 	_receiveMessage: (options, q, cb) =>
 		if(q.lifo)
+			console.log("*** LIFO");
 			@redis.evalsha @receiveMessageLIFO_sha1, 3, "#{@redisns}#{options.qname}", q.ts, q.ts + options.vt * 1000, @_handleReceivedMessage(cb)
 		else
+			console.log("*** FIFO");
 			@redis.evalsha @receiveMessage_sha1, 3, "#{@redisns}#{options.qname}", q.ts, q.ts + options.vt * 1000, @_handleReceivedMessage(cb)
 		return
 
