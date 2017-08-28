@@ -308,7 +308,25 @@ class RedisSMQ extends EventEmitter
 		#
 		# {id, message, rc, fr}
 
-		script_popMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
+		script_popMessage = 'local msg = redis.call("ZRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
+			if #msg == 0 then
+				return {}
+			end
+			redis.call("HINCRBY", KEYS[1] .. ":Q", "totalrecv", 1)
+			local mbody = redis.call("HGET", KEYS[1] .. ":Q", msg[1])
+			local rc = redis.call("HINCRBY", KEYS[1] .. ":Q", msg[1] .. ":rc", 1)
+			local o = {msg[1], mbody, rc}
+			if rc==1 then
+				table.insert(o, KEYS[2])
+			else
+				local fr = redis.call("HGET", KEYS[1] .. ":Q", msg[1] .. ":fr")
+				table.insert(o, fr)
+			end
+			redis.call("ZREM", KEYS[1], msg[1])
+			redis.call("HDEL", KEYS[1] .. ":Q", msg[1], msg[1] .. ":rc", msg[1] .. ":fr")
+			return o'
+
+		script_popMessageLIFO = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
 			if #msg == 0 then
 				return {}
 			end
@@ -344,7 +362,25 @@ class RedisSMQ extends EventEmitter
 		#
 		# {id, message, rc, fr}
 
-		script_receiveMessage = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
+		script_receiveMessage = 'local msg = redis.call("ZRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
+			if #msg == 0 then
+				return {}
+			end
+			redis.call("ZADD", KEYS[1], KEYS[3], msg[1])
+			redis.call("HINCRBY", KEYS[1] .. ":Q", "totalrecv", 1)
+			local mbody = redis.call("HGET", KEYS[1] .. ":Q", msg[1])
+			local rc = redis.call("HINCRBY", KEYS[1] .. ":Q", msg[1] .. ":rc", 1)
+			local o = {msg[1], mbody, rc}
+			if rc==1 then
+				redis.call("HSET", KEYS[1] .. ":Q", msg[1] .. ":fr", KEYS[2])
+				table.insert(o, KEYS[2])
+			else
+				local fr = redis.call("HGET", KEYS[1] .. ":Q", msg[1] .. ":fr")
+				table.insert(o, fr)
+			end
+			return o'
+
+		script_receiveMessageLIFO = 'local msg = redis.call("ZREVRANGEBYSCORE", KEYS[1], KEYS[2], "-inf", "LIMIT", "0", "1")
 			if #msg == 0 then
 				return {}
 			end
@@ -384,19 +420,31 @@ class RedisSMQ extends EventEmitter
 			redis.call("ZADD", KEYS[1], KEYS[3], KEYS[2])
 			return 1'
 
-		@redis.script "load", script_popMessage, (err, resp) =>
+		@redis.script "load", script_popMessageLIFO, (err, resp) =>
 			if err
 				console.log err
 				return
-			@popMessage_sha1 = resp
-			@emit('scriptload:popMessage');
+			@popMessageLIFO_sha1 = resp
+			@redis.script "load", script_popMessage, (err, resp) =>
+				if err
+					console.log err
+					return
+				@popMessage_sha1 = resp
+				@emit('scriptload:popMessage');
+				return
 			return
-		@redis.script "load", script_receiveMessage, (err, resp) =>
+		@redis.script "load", script_receiveMessageLIFO, (err, resp) =>
 			if err
 				console.log err
 				return
-			@receiveMessage_sha1 = resp
-			@emit('scriptload:receiveMessage');
+			@receiveMessageLIFO_sha1 = resp
+			@redis.script "load", script_receiveMessage, (err, resp) =>
+				if err
+					console.log err
+					return
+				@receiveMessage_sha1 = resp
+				@emit('scriptload:receiveMessage');
+				return
 			return
 		@redis.script "load", script_changeMessageVisibility, (err, resp) =>
 			@changeMessageVisibility_sha1 = resp
@@ -456,11 +504,19 @@ class RedisSMQ extends EventEmitter
 		return
 
 	_popMessage: (options, q, cb) =>
-		@redis.evalsha @popMessage_sha1, 2, "#{@redisns}#{options.qname}", q.ts, @_handleReceivedMessage(cb)
+		if(q.lifo)
+			@redis.evalsha @popMessageLIFO_sha1, 2, "#{@redisns}#{options.qname}", q.ts, @_handleReceivedMessage(cb)
+		else
+			@redis.evalsha @popMessage_sha1, 2, "#{@redisns}#{options.qname}", q.ts, @_handleReceivedMessage(cb)
 		return
 
 	_receiveMessage: (options, q, cb) =>
-		@redis.evalsha @receiveMessage_sha1, 3, "#{@redisns}#{options.qname}", q.ts, q.ts + options.vt * 1000, @_handleReceivedMessage(cb)
+		if(q.lifo)
+			console.log("*** LIFO");
+			@redis.evalsha @receiveMessageLIFO_sha1, 3, "#{@redisns}#{options.qname}", q.ts, q.ts + options.vt * 1000, @_handleReceivedMessage(cb)
+		else
+			console.log("*** FIFO");
+			@redis.evalsha @receiveMessage_sha1, 3, "#{@redisns}#{options.qname}", q.ts, q.ts + options.vt * 1000, @_handleReceivedMessage(cb)
 		return
 
 	sendMessage: (options, cb) =>
